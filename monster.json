@@ -1,0 +1,71 @@
+{
+ "monsterName": "",
+ "alignment": "",
+ "gender": "",
+ "size": "",
+ "type": "",
+ "customType": "",
+ "AC": 0,
+ "ACDescription": "",
+ "HPDice": 0,
+ "HPDiceType": 4,
+ "HP": 0,
+ "HPFormat": "0",
+ "proficiency": 2,
+ "abilityScores": {
+  "str": 10,
+  "dex": 10,
+  "con": 10,
+  "int": 10,
+  "wis": 10,
+  "cha": 10
+ },
+ "savingThrows": {
+  "str": 0,
+  "dex": 0,
+  "con": 0,
+  "int": 0,
+  "wis": 0,
+  "cha": 0
+ },
+ "speeds": {
+  "walk": 30,
+  "swim": 0,
+  "fly": 0,
+  "climb": 0,
+  "burrow": 0,
+  "hover": false
+ },
+ "senses": {
+  "senseList": [],
+  "senseType": "Darkvision",
+  "customType": "",
+  "senseDistance": 60,
+  "blindBeyond": false
+ },
+ "languages": [],
+ "language": "Abyssal",
+ "customLanguage": "",
+ "skills": {
+  "skillList": [],
+  "skill": "Athletics",
+  "proficient": false,
+  "bonus": 0,
+  "stat": "str"
+ },
+ "damageMods": {
+  "damageMods": [],
+  "damageType": "Bludgeoning",
+  "mod": "Resistance"
+ },
+ "conditionImmunities": [],
+ "condition": "Blinded",
+ "selectedTrait": {
+  "name": " ",
+  "displayName": " ",
+  "type": "",
+  "data": ""
+ },
+ "traits": [],
+ "abilities": []
+}

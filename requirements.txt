@@ -1,0 +1,7 @@
+flask
+flask-cors
+boto3
+shortuuid
+pynamodb
+
+zappa
