@@ -6,6 +6,6 @@
         "project_name": "beastforge-api",
         "runtime": "python3.7",
         "s3_bucket": "zappa-beastforge",
-        "cors": true
+        "cors": false
     }
 }

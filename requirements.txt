@@ -3,5 +3,7 @@ flask-cors
 boto3
 shortuuid
 pynamodb
+flask-dance
+python-dotenv
 
 zappa

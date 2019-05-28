@@ -9,3 +9,5 @@ class Monster(Model):
     id = UnicodeAttribute(hash_key=True)
     name = UnicodeAttribute()
 
+    owner = UnicodeAttribute(null=True)
+
