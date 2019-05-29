@@ -8,6 +8,9 @@ from flask import Flask, request, Request, jsonify, Response, redirect, url_for
 from flask_cors import CORS
 from flask_cors.decorator import LOG
 from flask_dance.contrib.google import make_google_blueprint, google
+from oauthlib.oauth2 import InvalidGrantError, TokenExpiredError
+import jwt
+import datetime
 
 from model import Monster
 
@@ -34,13 +37,16 @@ client = boto3.client('s3')
 
 request: Request = request
 
+app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY')
+
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "supersekrit")
 app.config["GOOGLE_OAUTH_CLIENT_ID"] = os.environ.get("GOOGLE_OAUTH_CLIENT_ID")
 app.config["GOOGLE_OAUTH_CLIENT_SECRET"] = os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET")
 google_bp = make_google_blueprint(
 	scope="https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email",
+	offline=True,
 	redirect_url='https://jhxwb4ferb.execute-api.us-west-2.amazonaws.com/prod/login'
-	#redirect_to='login'
+	# redirect_to='login'
 )
 app.register_blueprint(google_bp, url_prefix="/login")
 
@@ -49,20 +55,43 @@ def valid_redirect(url: str) -> bool:
 
 @app.route("/login")
 def login():
-	if not google.authorized:
+	if not google.authorized or valid_redirect(request.args.get('redirect')):
+		# not logged in, redirect to google login
 		r = redirect(url_for("google.login"))
 		if valid_redirect(request.args.get('redirect')):
 			r.set_cookie('redirect', request.args['redirect'])
+
+			resp = google.get("/oauth2/v1/userinfo")
+			assert resp.ok, resp.text
+			token = jwt.encode({
+					'email': resp.json()["email"],
+				    'exp': datetime.datetime.utcnow() + datetime.timedelta(hours=24),
+				},
+				app.config['JWT_SECRET_KEY'])
+
+			print("TOKEN IS:")
+			print(token)
+			r.set_cookie('email', token)
+
+
+
 		return r
 	elif valid_redirect(request.cookies.get('redirect')):
+		# ???
 		r = redirect(request.cookies['redirect'])
 		r.set_cookie('redirect', '')
+		print('branch 2')
 		return r
 	elif valid_redirect(request.args.get('redirect')):
+		# ???
+		# weird not-logged-in error here
+		print('branch 3')
 		return redirect(request.args['redirect'])
 	else:
+		# trying to redirect to a bad place without being logged in
 		resp = google.get("/oauth2/v1/userinfo")
 		assert resp.ok, resp.text
+		print('branch 4')
 		return "You are {email} on Google".format(email=resp.json()["email"])
 
 @app.route('/')
@@ -88,15 +117,16 @@ def list_monsters():
 
 	owner = 'public'
 	if google.authorized:
-		try:
-			resp = google.get("/oauth2/v1/userinfo")
-			assert resp.ok, resp.text
-			# monsters.append({
-			# 	'name': f'YOU were the biggest monster of them all, {resp.json()["email"]}'
-			# })
-			owner = resp.json()["email"]
-		except:
-			pass
+		owner = jwt.decode(request.cookies.get('email'), app.config['JWT_SECRET_KEY'])['email']
+		# try:
+		# 	resp = google.get("/oauth2/v1/userinfo")
+		# 	assert resp.ok, resp.text
+		# 	owner = resp.json()["email"]
+		# except (InvalidGrantError, TokenExpiredError):  # or maybe any OAuth2Error
+		# 	print('got invalid error')
+		# 	return redirect(url_for("google.login"))
+		# # 	print("errored")
+	print(owner)
 	# if user not logged in, give them public monsters
 	# if user is logged in, give them all monsters with their email as well
 	for monster in Monster.scan(Monster.owner == owner):
@@ -132,12 +162,14 @@ def save_monster():
 
 	owner = 'public'
 	if google.authorized:
-		try:
-			resp = google.get("/oauth2/v1/userinfo")
-			assert resp.ok, resp.text
-			owner = resp.json()["email"]
-		except:
-			pass
+		owner = jwt.decode(request.cookies.get('email'), app.config['JWT_SECRET_KEY'])['email']
+		# try:
+		# 	print('authorised')
+		# 	resp = google.get("/oauth2/v1/userinfo")
+		# 	assert resp.ok, resp.text
+		# 	owner = resp.json()["email"]
+		# except:
+		# 	print("why are we here?")
 
 	monster_id = shortuuid.uuid()
 	print(owner)
