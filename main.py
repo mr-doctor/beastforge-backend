@@ -2,6 +2,8 @@ import json
 import logging
 
 import os
+from typing import Optional
+
 import boto3
 import shortuuid
 from flask import Flask, request, Request, jsonify, Response, redirect, url_for
@@ -37,17 +39,23 @@ client = boto3.client('s3')
 
 request: Request = request
 
+logger = logging.getLogger(__name__)
+
 app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY')
 
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "supersekrit")
 app.config["GOOGLE_OAUTH_CLIENT_ID"] = os.environ.get("GOOGLE_OAUTH_CLIENT_ID")
 app.config["GOOGLE_OAUTH_CLIENT_SECRET"] = os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET")
-google_bp = make_google_blueprint(
-	scope="https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email",
-	offline=True,
-	redirect_url='https://jhxwb4ferb.execute-api.us-west-2.amazonaws.com/prod/login'
-	# redirect_to='login'
-)
+if bool(os.environ.get('FLASK_DEBUG')):
+	google_bp = make_google_blueprint(
+		scope="https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email",
+		redirect_to='login'
+	)
+else:
+	google_bp = make_google_blueprint(
+		scope="https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email",
+		redirect_url='https://jhxwb4ferb.execute-api.us-west-2.amazonaws.com/prod/login'
+	)
 app.register_blueprint(google_bp, url_prefix="/login")
 
 def valid_redirect(url: str) -> bool:
@@ -55,51 +63,66 @@ def valid_redirect(url: str) -> bool:
 
 @app.route("/login")
 def login():
-	if not google.authorized or valid_redirect(request.args.get('redirect')):
-		# not logged in, redirect to google login
+	if google.authorized:
+		try:
+			resp = google.get("/oauth2/v1/userinfo")
+			assert resp.ok, resp.text
+		except:
+			require_login = True
+		else:
+			require_login = False
+	else:
+		require_login = True
+
+	if require_login:
 		r = redirect(url_for("google.login"))
 		if valid_redirect(request.args.get('redirect')):
 			r.set_cookie('redirect', request.args['redirect'])
-
-			resp = google.get("/oauth2/v1/userinfo")
-			assert resp.ok, resp.text
-			token = jwt.encode({
-					'email': resp.json()["email"],
-				    'exp': datetime.datetime.utcnow() + datetime.timedelta(hours=24),
-				},
-				app.config['JWT_SECRET_KEY'])
-
-			print("TOKEN IS:")
-			print(token)
-			r.set_cookie('email', token)
-
-
-
 		return r
-	elif valid_redirect(request.cookies.get('redirect')):
-		# ???
-		r = redirect(request.cookies['redirect'])
-		r.set_cookie('redirect', '')
-		print('branch 2')
-		return r
-	elif valid_redirect(request.args.get('redirect')):
-		# ???
-		# weird not-logged-in error here
-		print('branch 3')
-		return redirect(request.args['redirect'])
 	else:
-		# trying to redirect to a bad place without being logged in
-		resp = google.get("/oauth2/v1/userinfo")
-		assert resp.ok, resp.text
-		print('branch 4')
-		return "You are {email} on Google".format(email=resp.json()["email"])
+		if valid_redirect(request.cookies.get('redirect')):
+			# user just logged in
+			# they were redirected here *from google*, which they were redirected to from flask dance,
+			# which they were redirected to from /login. When they visited /login, then provided ?redirect=...
+			# and this was transferred to a redirect cookie
+			r = redirect(request.cookies['redirect'])
+			r.set_cookie('redirect', '')
+		elif valid_redirect(request.args.get('redirect')):
+			# user already logged in and oauth valid
+			# they have logged in before, and their OAUTH token was still valid to fetch their email
+			r = redirect(request.args['redirect'])
+		else:
+			# already logged in or just logged in, no valid redirect (usually shouldn't get here)
+			r = Response(response="You are {email} on Google".format(email=resp.json()["email"]))
+
+		user_jwt = jwt.encode(
+			{
+				'email': resp.json()["email"],
+				'exp': datetime.datetime.utcnow() + datetime.timedelta(days=8),
+			},
+			app.config['JWT_SECRET_KEY']
+		)
+		r.set_cookie('user', user_jwt, max_age=7 * 24 * 60)
+
+		return r
+
+
+def get_email() -> Optional[str]:
+	user_jwt = request.cookies.get('user')
+	try:
+		return jwt.decode(user_jwt, app.config['JWT_SECRET_KEY'])['email']
+	except Exception as e:
+		logger.warning(f'Failed to decode JWT {user_jwt}: {e}')
+		return None
+
 
 @app.route('/')
 def root():
-	if 'name' in request.args:
-		return f'Hi {request.args["name"]}'
+	email = get_email()
+	if email:
+		return f'Hi {email}'
 	else:
-		return f'Greetings stranger. You suck'
+		return Response(status=401, response='You are not logged in')
 
 # @app.route('/monster/<monster_id>')
 # def monster(monster_id: str):
@@ -115,21 +138,13 @@ def root():
 def list_monsters():
 	monsters = []
 
-	owner = 'public'
-	if google.authorized:
-		owner = jwt.decode(request.cookies.get('email'), app.config['JWT_SECRET_KEY'])['email']
-		# try:
-		# 	resp = google.get("/oauth2/v1/userinfo")
-		# 	assert resp.ok, resp.text
-		# 	owner = resp.json()["email"]
-		# except (InvalidGrantError, TokenExpiredError):  # or maybe any OAuth2Error
-		# 	print('got invalid error')
-		# 	return redirect(url_for("google.login"))
-		# # 	print("errored")
-	print(owner)
-	# if user not logged in, give them public monsters
-	# if user is logged in, give them all monsters with their email as well
-	for monster in Monster.scan(Monster.owner == owner):
+	owner = get_email()
+
+	filter = Monster.public == True
+	if owner:
+		filter |= Monster.owner == owner
+
+	for monster in Monster.scan(filter):
 		monsters.append({
 			'name': monster.name,
 			'monster_id': monster.id
@@ -159,17 +174,9 @@ def save_monster():
 	name = request.json['monsterName']
 	if not name:
 		return Response(status=400, response=json.dumps({'error': 'Must have a name'}))
-
-	owner = 'public'
-	if google.authorized:
-		owner = jwt.decode(request.cookies.get('email'), app.config['JWT_SECRET_KEY'])['email']
-		# try:
-		# 	print('authorised')
-		# 	resp = google.get("/oauth2/v1/userinfo")
-		# 	assert resp.ok, resp.text
-		# 	owner = resp.json()["email"]
-		# except:
-		# 	print("why are we here?")
+	owner = get_email()
+	if not owner:
+		return Response(status=401, response="Not logged in")
 
 	monster_id = shortuuid.uuid()
 	print(owner)
